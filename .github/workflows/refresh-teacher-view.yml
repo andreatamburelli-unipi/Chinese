@@ -1,0 +1,56 @@
+name: Refresh encrypted teacher view
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Copy encrypted progress from the Notebook
+        env:
+          NOTEBOOK_SITE_BYPASS_TOKEN: ${{ secrets.NOTEBOOK_SITE_BYPASS_TOKEN }}
+        run: |
+          test -n "$NOTEBOOK_SITE_BYPASS_TOKEN"
+          curl --fail --silent --show-error --max-redirs 0 --retry 3 \
+            --connect-timeout 10 --max-time 60 \
+            -H "OAI-Sites-Authorization: Bearer ${NOTEBOOK_SITE_BYPASS_TOKEN}" \
+            'https://andreas-chinese-notebook.unipi.chatgpt.site/api/teacher-feed' \
+            -o teacher-feed.next.json
+          python3 - <<'PY'
+          import base64, json, os
+          from pathlib import Path
+
+          fresh = json.loads(Path('teacher-feed.next.json').read_text())
+          if set(fresh) != {'nonce', 'cipher', 'revision'}:
+              raise SystemExit('Unexpected teacher feed format')
+          if len(base64.b64decode(fresh['nonce'], validate=True)) != 12:
+              raise SystemExit('Invalid encryption nonce')
+          if len(base64.b64decode(fresh['cipher'], validate=True)) < 16:
+              raise SystemExit('Invalid encrypted payload')
+          if len(base64.b64decode(fresh['revision'], validate=True)) != 32:
+              raise SystemExit('Invalid change marker')
+
+          previous = Path('teacher-feed.json')
+          if previous.exists() and json.loads(previous.read_text()).get('revision') == fresh['revision']:
+              Path('teacher-feed.next.json').unlink()
+          else:
+              os.replace('teacher-feed.next.json', previous)
+          PY
+      - name: Publish changed ciphertext
+        run: |
+          if [ -z "$(git status --porcelain -- teacher-feed.json)" ]; then
+            echo 'No progress changes'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- teacher-feed.json
+          git commit -m 'Refresh encrypted teacher view'
+          git push
