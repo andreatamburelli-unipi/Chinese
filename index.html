@@ -35,6 +35,8 @@
     .corrected{padding:15px;background:var(--pale);border-radius:8px}
     .error{border-left:3px solid #d49456;padding:7px 0 7px 13px;margin:8px 0}.error p{margin:0}
     .score{color:var(--teal);font-weight:700;white-space:nowrap}
+    .feed-status{padding:12px 15px;border:1px solid var(--line);border-radius:8px;background:var(--pale);margin:0 0 12px}
+    .feed-status.warning{border-color:#d49456;background:#fff4e5;color:#633b16}
     .review{padding:16px 0;border-bottom:1px solid var(--line)}.review:last-child{border:0}
     footer{color:var(--muted);font-size:.85rem;border-top:1px solid var(--line);padding-top:14px;margin-top:30px}
     @media(max-width:600px){header{padding:30px 22px}main{padding:20px 15px 60px}summary{align-items:start}}
@@ -51,6 +53,7 @@
       <button id="unlock" type="button">Open view</button><p id="message" role="status" class="muted small"></p>
     </section>
     <div id="content" class="hidden">
+      <p id="feed-status" class="feed-status" role="status"></p>
       <p id="asof" class="muted small"></p>
       <nav aria-label="Teacher view sections">
         <button data-tab="overview" aria-current="page">Overview</button>
@@ -69,8 +72,8 @@
       if(!response.ok)throw Error("Feed unavailable");
       const feed=await response.json();
       if(typeof feed.nonce!=="string"||typeof feed.cipher!=="string")throw Error("Invalid feed");
-      return feed;
-    }catch{return offlineEncrypted}
+      return {encrypted:feed,source:"published"};
+    }catch{return {encrypted:offlineEncrypted,source:"offline"}}
   }
   const $=id=>document.getElementById(id);
   const node=(tag,cls,text)=>{const e=document.createElement(tag);if(cls)e.className=cls;if(text!==undefined)e.textContent=String(text);return e};
@@ -118,13 +121,24 @@
   async function open(){
     const key=$("key").value.trim()||new URLSearchParams(location.hash.slice(1)).get("k")||"";
     if(!key){$("message").textContent="The access key is missing.";return}
+    let source;
     try{
-      const encrypted=await latestEncrypted();
+      const result=await latestEncrypted();
+      const encrypted=result.encrypted;source=result.source;
       const imported=await crypto.subtle.importKey("raw",b64(key),{name:"AES-GCM"},false,["decrypt"]);
       const bytes=await crypto.subtle.decrypt({name:"AES-GCM",iv:b64(encrypted.nonce),
         additionalData:new TextEncoder().encode("Chinese Notebook teacher view v1")},imported,b64(encrypted.cipher));
-      render(JSON.parse(new TextDecoder().decode(bytes)));$("message").textContent=""
-    }catch(e){$("message").textContent="This key did not open the view. Ask Andrea for the complete link."}
+      render(JSON.parse(new TextDecoder().decode(bytes)));
+      const status=$("feed-status");
+      status.classList.toggle("warning",source==="offline");
+      status.setAttribute("role",source==="offline"?"alert":"status");
+      status.textContent=source==="offline"
+        ?"Warning: The published encrypted progress could not be retrieved. You are viewing an embedded offline snapshot, which may be out of date. Check again later."
+        :"Showing the latest encrypted progress retrieved from the published feed.";
+      $("message").textContent=""
+    }catch(e){$("message").textContent=(source==="offline"
+      ?"Warning: The published encrypted progress could not be retrieved. The embedded offline snapshot may be out of date. "
+      :"")+"This key did not open the view. Ask Andrea for the complete link."}
   }
   $("unlock").addEventListener("click",open);
   $("key").addEventListener("keydown",e=>{if(e.key==="Enter")open()});
